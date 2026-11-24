@@ -1,0 +1,6 @@
+.venv/
+proba_nyers.jsonl
+proba_eredmeny.txt
+*.xlsx
+gyorsitotar/
+naplo.txt
