@@ -382,6 +382,7 @@ class Ceg:
     rolunk: str | None = None
     csoport: str | None = None
     kizaras: str | None = None
+    egyeb_szakma: str | None = None
     web: dict[str, Any] | None = None
     pont: float = 0.0
     szint: str = ""
@@ -434,6 +435,13 @@ class Ceg:
         if self.web:
             tel += [t for t in self.web.get("telefonok", []) if t not in tel]
             em += [e for e in self.web.get("emailek", []) if e not in em]
+
+        def rang(e: str) -> int:
+            if any(e.startswith(x) for x in B.EMAIL_ELORE):
+                return 0
+            return 2 if any(x in e for x in B.EMAIL_HATRA) else 1
+
+        em.sort(key=rang)
         return tel, em
 
     def weboldal_domain(self) -> str | None:
@@ -519,14 +527,26 @@ def elozetes_pont(c: Ceg, ma: datetime) -> float:
     return m["ossz_nap"] + 30 * m["db"]
 
 
-def ceg_feldolgozas(col: MetaAdsCollector, ut: Utemezo, c: Ceg, ma: datetime, tele: dict[str, bool]) -> None:
-    # 1. A ceg osszes hirdetese (teljes kep)
-    ads = kereses(col, ut, f"ceg {c.nev}", query="", search_type="PAGE", page_ids=[c.page_id],
-                  status="ALL", max_results=B.MAX_HIRDETES_PER_CEG)
-    for a in ads:
-        c.hirdetesek.setdefault(a.id, a)
-    if any(cta_tipusok(a) & B.TILTOTT_CTA for a in c.hirdetesek.values()):
-        c.kizaras = "bolt / webáruház (Vásárlás gomb)"
+def _talalat(szoveg: str, szavak: list[str]) -> int:
+    return sum(szoveg.count(s) for s in szavak)
+
+
+def helyi_szures(c: Ceg, ma: datetime) -> None:
+    """Lekeres nelkuli szures a mar letoltott hirdetesekbol. Beallitja: kizaras / csoport / egyeb_szakma."""
+    ads = list(c.hirdetesek.values())
+    shop = sum(1 for a in ads if cta_tipusok(a) & B.TILTOTT_CTA)
+    if ads and shop * 2 > len(ads):
+        c.kizaras = f"bolt / webáruház ({shop}/{len(ads)} hirdetés Vásárlás gombos)"
+        return
+    nev_dom = f" {c.nev.lower()} {c.weboldal_domain() or ''} "
+    marka = next((m for m in B.TILTOTT_MARKAK if m in nev_dom), None)
+    if marka:
+        c.kizaras = f"gyártó / márka / áruház ({marka.strip()})"
+        return
+    szoveg = " ".join(hirdetes_szoveg(a) for a in ads).lower()
+    termek, szolg = _talalat(szoveg, B.TERMEK_SZAVAK), _talalat(szoveg, B.SZOLGALTATAS_SZAVAK)
+    if termek > szolg:
+        c.kizaras = f"termékértékesítő (termék-szavak {termek}, szolgáltatás-szavak {szolg})"
         return
     c.csoport = c.csoport_dontes(ma)
     if c.csoport is None:
@@ -534,10 +554,20 @@ def ceg_feldolgozas(col: MetaAdsCollector, ut: Utemezo, c: Ceg, ma: datetime, te
                      if any(a.is_active for a in c.ablak(ma))
                      else f"nincs legalább {B.MIN_FUTAS_NAP} napos hirdetés az időablakban")
         return
-    if tele[c.csoport]:
-        c.kizaras = f"a(z) {c.csoport} csoport már megtelt"
+    teljes = nev_dom + " " + szoveg
+    fo = _talalat(teljes, B.FO_SZAKMA_SZAVAK) + 3 * _talalat(nev_dom, B.FO_SZAKMA_SZAVAK)
+    teto = _talalat(teljes, B.TETOFEDO_SZAVAK) + 3 * _talalat(nev_dom, B.TETOFEDO_SZAVAK)
+    if teto > 0 and teto >= fo:
+        c.kizaras = "tetőfedő"
         return
-    # 2. Reszletek: kategoria + eleres a leghosszabban futo hirdetesekre
+    egyeb = {k: _talalat(teljes, v) + 3 * _talalat(nev_dom, v) for k, v in B.EGYEB_SZAKMA_SZAVAK.items()}
+    legjobb = max(egyeb, key=lambda k: egyeb[k])
+    if egyeb[legjobb] > fo:
+        c.egyeb_szakma = legjobb
+
+
+def ceg_feldolgozas(col: MetaAdsCollector, ut: Utemezo, c: Ceg, ma: datetime) -> None:
+    """Reszletek lekerese: kategoria + eleres a leghosszabban futo hirdetesekre."""
     jeloltek = sorted(c.ablak(ma), key=lambda a: futasi_nap(a, ma) or 0, reverse=True)
     for i, a in enumerate(jeloltek[: B.MAX_ELERES_LEKERES_PER_CEG]):
         e = reszletek(col, ut, a)
@@ -564,62 +594,82 @@ def ceg_feldolgozas(col: MetaAdsCollector, ut: Utemezo, c: Ceg, ma: datetime, te
 def futtat() -> int:
     ma = most()
     kezdes = time.monotonic()
-    LOG.info("Gyujtes indul: cel %d aktiv + %d multbeli ceg, %d napos visszatekintes",
-             B.CEL_AKTIV, B.CEL_MULTBELI, B.VISSZATEKINTES_NAP)
+    LOG.info("Gyujtes indul: cel %d aktiv + %d multbeli + %d egyeb ceg, %d napos visszatekintes",
+             B.CEL_AKTIV, B.CEL_MULTBELI, B.CEL_EGYEB, B.VISSZATEKINTES_NAP)
+    LOG.info("Biztonsagos leallitas barmikor: Ctrl+C (egyszer). Az eddigi eredmeny Excelbe kerul.")
     ut = Utemezo()
     leallas_oka = None
     kesz_cegek: list[Ceg] = []
     kizart: list[Ceg] = []
+    fel_nem_dolgozott = 0
     with MetaAdsCollector(rate_limit_delay=B.META_SZUNET[0],
                           jitter=B.META_SZUNET[1] - B.META_SZUNET[0], max_retries=2) as col:
         try:
             jeloltek = felderites(col, ut, ma)
-            sorrend = []
+            sorok: dict[str, list[Ceg]] = {"Aktív": [], "Múltbeli": [], "Egyéb": []}
             for c in jeloltek.values():
-                if any(cta_tipusok(a) & B.TILTOTT_CTA for a in c.hirdetesek.values()):
-                    c.kizaras = "bolt / webáruház (Vásárlás gomb)"
-                    kizart.append(c)
-                else:
-                    sorrend.append(c)
-            sorrend.sort(key=lambda c: elozetes_pont(c, ma), reverse=True)
-            LOG.info("Felderites kesz: %d jelolt ceg, %d elozetesen kizarva", len(sorrend), len(kizart))
-            darab = {"Aktív": 0, "Múltbeli": 0}
-            cel = {"Aktív": B.CEL_AKTIV, "Múltbeli": B.CEL_MULTBELI}
-            for i, c in enumerate(sorrend, 1):
-                tele = {k: darab[k] >= cel[k] for k in darab}
-                if all(tele.values()):
-                    break
-                # Ha mar a felderitett hirdetesek alapjan Aktiv, es az Aktiv csoport tele: keres nelkul kihagyjuk
-                if tele["Aktív"] and c.csoport_dontes(ma) == "Aktív":
-                    continue
-                LOG.info("[%d/%d] %s (aktiv %d/%d, multbeli %d/%d)", i, len(sorrend), c.nev,
-                         darab["Aktív"], cel["Aktív"], darab["Múltbeli"], cel["Múltbeli"])
-                ceg_feldolgozas(col, ut, c, ma, tele)
+                helyi_szures(c, ma)
                 if c.kizaras:
-                    LOG.info("   kizarva: %s", c.kizaras)
                     kizart.append(c)
                 else:
-                    darab[c.csoport] += 1  # type: ignore[index]
-                    kesz_cegek.append(c)
-                    LOG.info("   ELFOGADVA: %s | kategoria: %s", c.csoport, c.kategoria)
+                    sorok["Egyéb" if c.egyeb_szakma else c.csoport].append(c)  # type: ignore[index]
+            for s in sorok.values():
+                s.sort(key=lambda c: elozetes_pont(c, ma), reverse=True)
+            LOG.info("Felderites kesz: %d jelolt | helyben kizarva: %d | aktiv sor: %d | multbeli sor: %d | "
+                     "egyeb sor: %d", len(jeloltek), len(kizart), len(sorok["Aktív"]), len(sorok["Múltbeli"]),
+                     len(sorok["Egyéb"]))
+            cel = {"Aktív": B.CEL_AKTIV, "Múltbeli": B.CEL_MULTBELI, "Egyéb": B.CEL_EGYEB}
+            darab = {k: 0 for k in cel}
+            fel_nem_dolgozott = sum(len(s) for s in sorok.values())
+
+            def kovetkezo(nevek: tuple[str, ...]) -> tuple[str, Ceg] | None:
+                # A fo csoportokat felvaltva toltjuk, hogy leallasnal mindkettoben legyen eredmeny
+                nyitott = [n for n in nevek if darab[n] < cel[n] and sorok[n]]
+                if not nyitott:
+                    return None
+                n = min(nyitott, key=lambda x: darab[x] / max(cel[x], 1))
+                return n, sorok[n].pop(0)
+
+            for fazis in (("Aktív", "Múltbeli"), ("Egyéb",)):
+                while (k := kovetkezo(fazis)) is not None:
+                    sor_nev, c = k
+                    fel_nem_dolgozott -= 1
+                    LOG.info("%s (aktiv %d/%d, multbeli %d/%d, egyeb %d/%d)", c.nev, darab["Aktív"], cel["Aktív"],
+                             darab["Múltbeli"], cel["Múltbeli"], darab["Egyéb"], cel["Egyéb"])
+                    ceg_feldolgozas(col, ut, c, ma)
+                    if c.kizaras:
+                        LOG.info("   kizarva: %s", c.kizaras)
+                        kizart.append(c)
+                    else:
+                        darab[sor_nev] += 1
+                        kesz_cegek.append(c)
+                        LOG.info("   ELFOGADVA: %s%s | kategoria: %s", c.csoport,
+                                 f" (egyeb: {c.egyeb_szakma})" if c.egyeb_szakma else "", c.kategoria)
         except Leallas as exc:
             leallas_oka = str(exc)
             LOG.error("LEALLAS: %s Az eddigi eredmenyek mentese kovetkezik.", exc)
+        except KeyboardInterrupt:
+            leallas_oka = "kézi leállítás (Ctrl+C)"
+            LOG.warning("Kezi leallitas. A weboldal-bejaras (ujabb Ctrl+C-vel kihagyhato) es az Excel kovetkezik.")
 
     # 3. Weboldalak
-    for i, c in enumerate(kesz_cegek, 1):
-        dom = c.weboldal_domain()
-        if not dom:
-            continue
-        LOG.info("Weboldal [%d/%d]: %s", i, len(kesz_cegek), dom)
-        try:
-            c.web = weboldal_elemzes(dom, ma)
-        except Exception as exc:  # noqa: BLE001
-            LOG.info("Weboldal-elemzes hiba: %s (%s)", dom, exc)
+    try:
+        for i, c in enumerate(kesz_cegek, 1):
+            dom = c.weboldal_domain()
+            if not dom:
+                continue
+            LOG.info("Weboldal [%d/%d]: %s", i, len(kesz_cegek), dom)
+            try:
+                c.web = weboldal_elemzes(dom, ma)
+            except Exception as exc:  # noqa: BLE001
+                LOG.info("Weboldal-elemzes hiba: %s (%s)", dom, exc)
+    except KeyboardInterrupt:
+        LOG.warning("Weboldal-bejaras kihagyva. Excel keszul.")
 
     # 4. Pontozas es Excel
     for csop in ("Aktív", "Múltbeli"):
-        pontozas([c for c in kesz_cegek if c.csoport == csop], ma)
+        pontozas([c for c in kesz_cegek if c.csoport == csop and not c.egyeb_szakma], ma)
+    pontozas([c for c in kesz_cegek if c.egyeb_szakma], ma)
     from excel import excel_iras
 
     fajl = MAPPA / f"kontaktok_{ma.astimezone().strftime('%Y-%m-%d_%H%M')}.xlsx"
@@ -628,6 +678,7 @@ def futtat() -> int:
         "Időtartam (perc)": round((time.monotonic() - kezdes) / 60, 1),
         "Meta-kérések (kb.)": ut.keresek,
         "Leállás oka": leallas_oka or "nincs, rendben lefutott",
+        "Fel nem dolgozott jelöltek": fel_nem_dolgozott,
     })
     LOG.info("KESZ. Excel: %s", fajl)
     return 0 if leallas_oka is None else 2

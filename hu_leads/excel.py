@@ -19,7 +19,8 @@ CEG_OSZLOPOK: list[tuple[str, int]] = [
     ("Helyezés", 9), ("Cégnév", 32), ("Telefon", 18), ("További telefonok", 22), ("E-mail", 30),
     ("Weboldal", 30), ("Facebook-oldal", 34), ("Instagram", 18), ("Kategória", 24), ("Szakma", 20),
     ("Pontszám", 10), ("Össz. egyedi elérés", 16), ("Legnagyobb elérés", 15), ("Elérés lekérve (db hirdetés)", 14),
-    ("Hirdetések (3 hó)", 12), ("Egyedi kreatív", 11), ("Most aktív hirdetés", 12), ("Friss (<14 nap) aktív is", 13),
+    ("Talált hirdetések (3 hó)", 12), ("Egyedi kreatív", 11), ("Most aktív hirdetés", 12),
+    ("Friss (<14 nap) aktív is", 13),
     ("Leghosszabb futás (nap)", 13), ("Össz. futási nap", 12), ("Első hirdetés", 12), ("Utolsó aktivitás", 12),
     ("Weboldal pont (100)", 11), ("Weboldal: teljesült szempontok", 40), ("Weboldal aktivitás", 36),
     ("Példa hirdetésszöveg", 60), ("Hirdetéstár", 40),
@@ -55,7 +56,8 @@ def _ceg_sor(c: Ceg, helyezes: int, ma: datetime) -> list[Any]:
         helyezes, c.nev, tel[0] if tel else "nincs", ", ".join(tel[1:]), ", ".join(em[:3]),
         web.get("weboldal") or (f"https://{c.weboldal_domain()}" if c.weboldal_domain() else ""),
         f"https://www.facebook.com/{c.page_id}", c.instagram or "", c.kategoria or "",
-        ", ".join(sorted(c.szakmak)), c.pont, m["ossz_eleres"], m["max_eleres"], len(c.eleresek),
+        (f"{c.egyeb_szakma} ({c.csoport})" if c.egyeb_szakma else ", ".join(sorted(c.szakmak))),
+        c.pont, m["ossz_eleres"], m["max_eleres"], len(c.eleresek),
         m["db"], m["kreativ_db"], m["aktiv_db"], "igen" if m["friss_aktiv"] else "",
         m["max_nap"], m["ossz_nap"], m["elso"], m["utolso"],
         web.get("pont"), web.get("pont_reszletek", ""),
@@ -64,6 +66,15 @@ def _ceg_sor(c: Ceg, helyezes: int, ma: datetime) -> list[Any]:
         f"https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=HU&view_all_page_id={c.page_id}",
         "", "", "", "",
     ]
+
+
+def _ceg_lap(ws: Any, lista: list[Ceg], ma: datetime) -> None:
+    lista = sorted(lista, key=lambda c: c.pont, reverse=True)
+    for i, c in enumerate(lista, 1):
+        ws.append(_ceg_sor(c, i, ma))
+        for col in range(len(CEG_OSZLOPOK) - HIVO_OSZLOPOK + 1, len(CEG_OSZLOPOK) + 1):
+            ws.cell(row=i + 1, column=col).fill = HIVO_KITOLTES
+    ws.auto_filter.ref = ws.dimensions
 
 
 def excel_iras(fajl: Path, cegek: list[Ceg], kizart: list[Ceg], ma: datetime, meta: dict[str, Any]) -> None:
@@ -81,12 +92,15 @@ def excel_iras(fajl: Path, cegek: list[Ceg], kizart: list[Ceg], ma: datetime, me
     ]
     for csop in ("Aktív", "Múltbeli"):
         for szint in ("Kiemelt", "Közepes", "Kicsi"):
-            db = sum(1 for c in cegek if c.csoport == csop and c.szint == szint)
+            db = sum(1 for c in cegek if c.csoport == csop and c.szint == szint and not c.egyeb_szakma)
             sorok.append((f"{csop} – {szint}", db))
+    sorok.append(("Egyéb kivitelezők", sum(1 for c in cegek if c.egyeb_szakma)))
     telefonos = sum(1 for c in cegek if c.kontaktok()[0])
     sorok += [("Elfogadott cégek összesen", len(cegek)), ("ebből telefonszámmal", telefonos),
               ("ebből e-maillel", sum(1 for c in cegek if c.kontaktok()[1])), ("Kiszűrt cégek", len(kizart)),
               ("", ""),
+              ("Egyéb kivitelezők", "Rokon szakmák (festés, térkövezés, nyílászáró stb.), csoporttól függetlenül "
+                                    "egy fülön, relatív pontszám szerint. A tetőfedők kizárva."),
               ("Csoportok", "Aktív: van legalább 14 napja futó aktív hirdetése. Múltbeli: nincs ilyen, de az "
                             "elmúlt 3 hónapban volt legalább 14 napig futott hirdetése (friss aktív hirdetése lehet)."),
               ("Elérés", "A Meta által közölt egyedi fiókos EU-s elérés, cégenként a leghosszabban futó "
@@ -102,13 +116,11 @@ def excel_iras(fajl: Path, cegek: list[Ceg], kizart: list[Ceg], ma: datetime, me
         for szint in ("Kiemelt", "Közepes", "Kicsi"):
             ws = wb.create_sheet(f"{csop} – {szint}")
             _fejlec(ws, CEG_OSZLOPOK, HIVO_OSZLOPOK)
-            lista = [c for c in cegek if c.csoport == csop and c.szint == szint]
-            lista.sort(key=lambda c: c.pont, reverse=True)
-            for i, c in enumerate(lista, 1):
-                ws.append(_ceg_sor(c, i, ma))
-                for col in range(len(CEG_OSZLOPOK) - HIVO_OSZLOPOK + 1, len(CEG_OSZLOPOK) + 1):
-                    ws.cell(row=i + 1, column=col).fill = HIVO_KITOLTES
-            ws.auto_filter.ref = ws.dimensions
+            lista = [c for c in cegek if c.csoport == csop and c.szint == szint and not c.egyeb_szakma]
+            _ceg_lap(ws, lista, ma)
+    ws = wb.create_sheet("Egyéb kivitelezők")
+    _fejlec(ws, CEG_OSZLOPOK, HIVO_OSZLOPOK)
+    _ceg_lap(ws, [c for c in cegek if c.egyeb_szakma], ma)
 
     ws = wb.create_sheet("Kiszűrt")
     _fejlec(ws, [("Cégnév", 34), ("Ok", 50), ("Kategória", 26), ("Facebook-oldal", 36), ("Hirdetéstár", 40)])

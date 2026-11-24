@@ -3,6 +3,7 @@
 # --- Celszamok -------------------------------------------------------------
 CEL_AKTIV = 30  # ennyi ceg kell az "Aktiv" csoportba
 CEL_MULTBELI = 30  # ennyi ceg kell a "Multbeli" csoportba
+CEL_EGYEB = 20  # rokon szakmak (festo, terkovezo stb.) kulon fulre, a fo csoportok utan
 
 # --- Idoszabalyok ----------------------------------------------------------
 MIN_FUTAS_NAP = 14  # legalabb ennyi napig kell futnia egy hirdetesnek
@@ -18,10 +19,8 @@ KULCSSZAVAK = {
 # Kulcsszavankent legfeljebb ennyi hirdetes (30-asaval kerjuk le)
 MAX_AKTIV_HIRDETES_PER_KULCSSZO = 90
 MAX_LEJART_HIRDETES_PER_KULCSSZO = 240
-# Cegenkent legfeljebb ennyi hirdetest kerunk le a teljes kephez
-MAX_HIRDETES_PER_CEG = 60
 # Cegenkent legfeljebb ennyi hirdetes elereset kerjuk le (hirdetesenkent 1 keres)
-MAX_ELERES_LEKERES_PER_CEG = 4
+MAX_ELERES_LEKERES_PER_CEG = 2
 
 # --- Pontozas (relativ, a csoporton belul) ---------------------------------
 SULY_ELERES = 0.60
@@ -37,17 +36,46 @@ KOZEPES_ARANY = 0.30
 ENGEDELYEZETT_KATEGORIAK = [
     "construction", "contractor", "entrepreneur", "home improvement", "renovation",
     "tiling", "tile", "flooring", "insulation", "drywall", "plaster", "local business",
-    "home service", "handyman", "roofing", "painting", "carpenter", "builder", "interior design",
+    "home service", "handyman", "painting", "carpenter", "builder", "interior design",
     "építő", "kivitelez", "felújít", "burkol", "szigetel", "vállalkoz", "szaki",
 ]
 TILTOTT_KATEGORIAK = [
     "building material", "real estate", "lawyer", "law firm", "shopping", "retail", "store",
     "e-commerce", "website", "bank", "financ", "furniture", "hardware", "media", "news",
-    "education", "school", "wholesale", "manufactur",
+    "education", "school", "wholesale", "manufactur", "roofing", "advertising", "marketing",
     "építőanyag", "ingatlan", "ügyvéd", "bolt", "áruház", "webáruház", "nagyker",
 ]
-# Ilyen gombu hirdetes eseten a ceg kiesik (bolt / webaruhaz)
+# Ha a ceg hirdeteseinek tobb mint fele ilyen gombos, a ceg kiesik (bolt / webaruhaz)
 TILTOTT_CTA = {"SHOP_NOW"}
+
+# --- Szakma-felismeres a hirdetesszovegbol es a cegnevbol (kisbetus szoreszletek) ---
+FO_SZAKMA_SZAVAK = ["burkol", "csempé", "csempez", "járólap", "szigetel", "gipszkarton", "szárazépít",
+                    "álmennyezet", "hidegburkol"]
+TETOFEDO_SZAVAK = ["tetőfed", "tetofed", "bádogos", "cserepes", "tetőcser", "tetőfelújít", "lapostető",
+                   "ácsmunk", "ács ", "tetőszerkezet", "cserepeslemez", "trapézlemez"]
+EGYEB_SZAKMA_SZAVAK = {
+    "festés": ["festés", "festő", "mázol", "tapétáz", "szobafest"],
+    "térkövezés": ["térkő", "térkövez", "kőfarag", "díszkő"],
+    "nyílászáró": ["ablak", "nyílászáró", "redőny", "ajtó"],
+    "alapozás / beton": ["cölöp", "estrich", "esztrich", "beton"],
+    "kert / pergola": ["pergola", "terasz", "kerítés"],
+    "gépészet / energetika": ["napelem", "hőszivattyú", "klíma", "villany", "fűtés", "víz-gáz"],
+}
+# Termekertekesitore utalo szavak, illetve szolgaltatasra (kivitelezesre) utalok
+TERMEK_SZAVAK = ["webshop", "webáruház", "rendelje", "rendeld", "termék", "forgalmaz", "gyárt", "kapható",
+                 "házhozszállít", "kiszállítással", "raktárról", "nagyker", "viszonteladó", "üzletünk",
+                 "áruház", "szaküzlet", "katalógus", "rendelés"]
+SZOLGALTATAS_SZAVAK = ["vállal", "kivitelez", "árajánlat", "ajánlatkér", "felmérés", "munkáink", "referenci",
+                       "szakember", "brigád", "csapatunk", "határidő", "garanciá", "munkadíj", "szerelés"]
+# Gyartok, nagy markak, aruhazak: nevben vagy weboldal-cimben
+TILTOTT_MARKAK = ["mapei", "sika", "sto ", "stohomlokzat", "knauf", "baumit", "weber", "rigips", "ytong",
+                  "wienerberger", "bakonytherm", "austrotherm", "rockwool", "isover", "masterplast", "leier",
+                  "fadepo", "maslen", "ceresit", "henkel", "saint-gobain", "obi ", "praktiker", "bauhaus",
+                  "bauplaza", "merkbau", "tondach", "bramac", "creaton", "lindab", "kingspan", "schiedel",
+                  "porotherm", "xella", "murexin", "kerakoll", "ardex", "zalakerámia", "cersanit", "keravill"]
+# E-mail sorrend: ezek elore, az allas/karrier cimek hatra
+EMAIL_ELORE = ["info@", "iroda@", "ajanlat@", "office@", "hello@", "kapcsolat@"]
+EMAIL_HATRA = ["allas@", "karrier@", "career", "recruit", "hr@", "jobs@", "munka@", "szamlazas@", "noreply"]
 
 # --- Kimeles az IP vedelmeert -----------------------------------------------
 META_SZUNET = (5.0, 9.0)  # masodperc ket Meta-keres kozott (veletlenszeru)
