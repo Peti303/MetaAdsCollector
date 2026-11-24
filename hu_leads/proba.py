@@ -30,6 +30,10 @@ def pihen(a: float, b: float) -> None:
     time.sleep(random.uniform(a, b))
 
 
+def utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def nap(ad, most):
     if ad.delivery_start_time is None:
         return None
@@ -47,10 +51,10 @@ def nap(ad, most):
 def main() -> int:
     most = datetime.now(timezone.utc)
     sorok: list[str] = [f"Probafutas: {most.isoformat(timespec='seconds')}", ""]
-    nyers = open(OUT_DIR / "proba_nyers.jsonl", "w", encoding="utf-8")
     ossz_ok = True
 
-    with MetaAdsCollector(rate_limit_delay=5.0, jitter=4.0, max_retries=2) as col:
+    with (OUT_DIR / "proba_nyers.jsonl").open("w", encoding="utf-8") as nyers, \
+            MetaAdsCollector(rate_limit_delay=5.0, jitter=4.0, max_retries=2) as col:
         for kw in KULCSSZAVAK:
             sorok.append(f"=== Kulcsszo: {kw} ===")
             ads = []
@@ -64,19 +68,22 @@ def main() -> int:
             aktiv = [a for a in ads if a.is_active]
             lejart = [a for a in ads if a.is_active is False]
             lejart_datummal = [a for a in lejart if a.delivery_stop_time]
-            utolso30 = [a for a in lejart_datummal
-                        if (most - a.delivery_stop_time.replace(tzinfo=a.delivery_stop_time.tzinfo or timezone.utc)).days <= 30]
+            utolso30 = [a for a in lejart_datummal if (most - utc(a.delivery_stop_time)).days <= 30]
             napok = [nap(a, most) for a in ads]
             min14 = [d for d in napok if d is not None and d >= 14]
             oldalak = {a.page.id for a in ads if a.page}
             linkes = [a for a in ads if any(c.link_url for c in a.creatives)]
             telefon = [a for a in ads if any(PHONE_RE.search(c.body or "") for c in a.creatives)]
             email = [a for a in ads if any(EMAIL_RE.search(c.body or "") for c in a.creatives)]
+            ismeretlen = len(ads) - len(aktiv) - len(lejart)
             sorok += [
-                f"Hirdetesek: {len(ads)} | aktiv: {len(aktiv)} | lejart: {len(lejart)} | ismeretlen: {len(ads)-len(aktiv)-len(lejart)}",
-                f"Lejart, befejezesi datummal: {len(lejart_datummal)} | ebbol utolso 30 napban vegzodott: {len(utolso30)}",
-                f"Futasi ido kiszamolhato: {sum(d is not None for d in napok)} | legalabb 14 napig futott: {len(min14)}",
-                f"Kulonbozo hirdeto oldal: {len(oldalak)} | weboldal-linkes: {len(linkes)} | telefon a szovegben: {len(telefon)} | email a szovegben: {len(email)}",
+                f"Hirdetesek: {len(ads)} | aktiv: {len(aktiv)} | lejart: {len(lejart)} | ismeretlen: {ismeretlen}",
+                f"Lejart, befejezesi datummal: {len(lejart_datummal)}"
+                f" | ebbol utolso 30 napban vegzodott: {len(utolso30)}",
+                f"Futasi ido kiszamolhato: {sum(d is not None for d in napok)}"
+                f" | legalabb 14 napig futott: {len(min14)}",
+                f"Kulonbozo hirdeto oldal: {len(oldalak)} | weboldal-linkes: {len(linkes)}"
+                f" | telefon a szovegben: {len(telefon)} | email a szovegben: {len(email)}",
             ]
             # Reszletek (eleres) nehany hirdetesre: a leghosszabban futok
             jeloltek = sorted(ads, key=lambda a: nap(a, most) or -1, reverse=True)[:RESZLETEZETT_PER_KULCSSZO]
@@ -100,7 +107,6 @@ def main() -> int:
             sorok.append("")
             pihen(20, 40)  # hosszabb szunet kulcsszavak kozott
 
-    nyers.close()
     sorok.append("EREDMENY: " + ("rendben lefutott" if ossz_ok else "volt hiba, lasd fent"))
     (OUT_DIR / "proba_eredmeny.txt").write_text("\n".join(sorok), encoding="utf-8")
     print("\n".join(sorok))
